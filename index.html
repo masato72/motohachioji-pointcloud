@@ -159,6 +159,7 @@ function initScene() {
 
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 10000);
   camera.position.set(0, 0, 5);
+  camera.up.set(0, 0, 1); // 点群データは高さ方向がZ軸なので、水平ドラッグでZ軸回りに回転するようにする
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
