@@ -14,6 +14,10 @@
     backdrop-filter: blur(4px);
   }
   #overlay b { color: #fff; }
+  .overlayHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #collapseBtn { padding: 2px 9px; font-size: 13px; line-height: 1.2; }
+  #overlay.collapsed { width: auto; }
+  #overlay.collapsed #overlayBody { display: none; }
   #overlay hr { border: none; border-top: 1px solid #444; margin: 8px 0; }
   .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
   .row label { flex: 0 0 auto; color: #ccc; font-size: 12px; }
@@ -76,7 +80,11 @@
 <div id="container"></div>
 
 <div id="overlay">
-  <div><b>点群ビューア</b></div>
+  <div class="overlayHeader">
+    <b>点群ビューア</b>
+    <button id="collapseBtn" title="折りたたむ">▾</button>
+  </div>
+<div id="overlayBody">
   <div>左ドラッグ: 回転 / 右ドラッグ: 移動 / ホイール: ズーム</div>
   <div id="pointInfo">読み込み中...</div>
   <hr>
@@ -156,6 +164,7 @@
     <span class="sizeVal" id="clipVal">-</span>
   </div>
 </div>
+</div>
 
 <div id="stats"></div>
 
@@ -177,6 +186,13 @@ import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 const PLY_FILE = 'motohachioji_light_4cm_r40.ply';
 
 const loading = document.getElementById('loading');
+const overlayEl = document.getElementById('overlay');
+const collapseBtn = document.getElementById('collapseBtn');
+collapseBtn.addEventListener('click', () => {
+  const collapsed = overlayEl.classList.toggle('collapsed');
+  collapseBtn.textContent = collapsed ? '▸' : '▾';
+  collapseBtn.title = collapsed ? '展開する' : '折りたたむ';
+});
 const pointInfo = document.getElementById('pointInfo');
 const statsEl = document.getElementById('stats');
 const sizeSlider = document.getElementById('sizeSlider');
