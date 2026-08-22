@@ -11,13 +11,18 @@
     position: absolute; top: 12px; left: 12px; z-index: 10;
     background: rgba(20,20,20,0.8); color: #eee; padding: 10px 14px;
     border-radius: 8px; font-size: 13px; line-height: 1.6; width: 300px;
+    max-width: calc(100vw - 24px);
     backdrop-filter: blur(4px);
   }
-  #overlay b { color: #fff; }
+  #overlay b { color: #fff; user-select: none; -webkit-user-select: none; }
   .overlayHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  #collapseBtn { padding: 2px 9px; font-size: 13px; line-height: 1.2; }
-  #overlay.collapsed { width: auto; }
+  #collapseBtn {
+    padding: 0; width: 44px; height: 44px; font-size: 18px; line-height: 1;
+    flex: 0 0 auto; touch-action: manipulation;
+  }
+  #overlay.collapsed { width: auto; padding: 4px 8px; }
   #overlay.collapsed #overlayBody { display: none; }
+  #overlay.collapsed #collapseBtn { width: 40px; height: 40px; }
   #overlay hr { border: none; border-top: 1px solid #444; margin: 8px 0; }
   .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
   .row label { flex: 0 0 auto; color: #ccc; font-size: 12px; }
@@ -28,7 +33,7 @@
   .sizeVal { width: 52px; text-align: right; font-family: monospace; font-size: 12px; color: #9cf; }
   button {
     background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px;
-    padding: 5px 10px; font-size: 12px; cursor: pointer;
+    padding: 5px 10px; font-size: 12px; cursor: pointer; touch-action: manipulation;
   }
   button:hover { background: #383838; }
   button.active { background: #2f6fb3; border-color: #4a90d9; color: #fff; }
