@@ -46,6 +46,18 @@
     font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
     pointer-events: none;
   }
+  .areaLabel, .pinLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    font-weight: 600; font-size: 12px; padding: 2px 6px; border-radius: 4px;
+    white-space: nowrap; pointer-events: none;
+  }
+  .areaLabel { background: rgba(90, 230, 140, 0.92); color: #111; }
+  .pinLabel { background: rgba(255, 160, 0, 0.95); color: #111; }
+  #areaResult { font-size: 12px; color: #8f8; margin: 4px 0; }
+  #pinList { max-height: 130px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-top: 6px; }
+  #pinList div { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: #ddd; }
+  #pinList .pinNote { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pinList button { padding: 1px 7px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -72,6 +84,30 @@
   <div id="measureList"></div>
   <hr>
   <div class="row">
+    <button id="areaModeBtn">📐 面積/体積: OFF</button>
+    <button id="areaFinishBtn" style="display:none;">確定</button>
+    <button id="areaClearBtn">クリア</button>
+  </div>
+  <div id="areaHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックして頂点を追加(3点以上)。「確定」で多角形を閉じます
+  </div>
+  <div id="areaResult" style="display:none;"></div>
+  <div class="row" id="baseHeightRow" style="display:none;">
+    <label>基準高さ</label>
+    <input type="number" id="baseHeightInput" step="0.01" style="width:80px; background:#2a2a2a; color:#eee; border:1px solid #555; border-radius:6px; padding:2px 6px;">
+    <span style="font-size:12px; color:#9cf;">m</span>
+  </div>
+  <hr>
+  <div class="row">
+    <button id="pinModeBtn">📌 ピン留め: OFF</button>
+    <button id="pinClearBtn">クリア</button>
+  </div>
+  <div id="pinHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックしてピンを追加し、メモを入力します
+  </div>
+  <div id="pinList"></div>
+  <hr>
+  <div class="row">
     <button id="clipToggleBtn">✂️ 断面カット: OFF</button>
     <button id="clipFlipBtn">反転</button>
   </div>
@@ -79,8 +115,8 @@
     <label>軸</label>
     <select id="clipAxis">
       <option value="x">X</option>
-      <option value="y">Y</option>
-      <option value="z">Z (高さ)</option>
+      <option value="y">Y (高さ)</option>
+      <option value="z">Z</option>
     </select>
   </div>
   <div class="row" id="clipPosRow" style="display:none;">
@@ -125,13 +161,38 @@ const clipAxisSelect = document.getElementById('clipAxis');
 const clipPosRow = document.getElementById('clipPosRow');
 const clipSlider = document.getElementById('clipSlider');
 const clipVal = document.getElementById('clipVal');
+const areaModeBtn = document.getElementById('areaModeBtn');
+const areaFinishBtn = document.getElementById('areaFinishBtn');
+const areaClearBtn = document.getElementById('areaClearBtn');
+const areaHint = document.getElementById('areaHint');
+const areaResult = document.getElementById('areaResult');
+const baseHeightRow = document.getElementById('baseHeightRow');
+const baseHeightInput = document.getElementById('baseHeightInput');
+const pinModeBtn = document.getElementById('pinModeBtn');
+const pinClearBtn = document.getElementById('pinClearBtn');
+const pinHint = document.getElementById('pinHint');
+const pinList = document.getElementById('pinList');
 
 let scene, camera, renderer, controls, pointCloud, raycaster;
 let sceneScale = 1; // バウンディングスフィア半径。サイズ調整の基準にする
+let activeTool = 'none'; // 'none' | 'measure' | 'area' | 'pin'（クリック系ツールは排他）
+
 let measureMode = false;
 let pendingPoint = null;   // 測定中の1点目
 let pendingMarker = null;
 const measurements = []; // {a, b, markerA, markerB, line, label, dist}
+
+// 面積/体積計測
+let areaPoints = [];   // Vector3[]
+let areaMarkers = [];  // Mesh[]
+let areaLine = null;   // THREE.Line
+let areaLabel = null;  // 浮動ラベル div（._centroidに中心座標を保持）
+let areaFinished = false;
+let areaValue = 0;     // m^2
+let areaAvgZ = 0;
+
+// 注記ピン
+const pins = []; // {marker, label, note, position}
 
 let clipEnabled = false;
 let clipFlip = false;
@@ -159,7 +220,6 @@ function initScene() {
 
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 10000);
   camera.position.set(0, 0, 5);
-  camera.up.set(0, 0, 1); // 点群データは高さ方向がZ軸なので、水平ドラッグでZ軸回りに回転するようにする
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -180,6 +240,9 @@ function initScene() {
   });
 
   setupMeasurement();
+  setupAreaTool();
+  setupPinTool();
+  setupInteraction();
   setupClipping();
   animate();
 }
@@ -195,12 +258,30 @@ function loadPlyArrayBuffer(arrayBuffer, label) {
   const loader = new PLYLoader();
   const geometry = loader.parse(arrayBuffer);
 
+  // 点群データは高さ方向がZ軸（測量系）だが、Three.js/OrbitControlsの標準はY-upなので
+  // 読み込み時に-90°X回転して座標をY-upへ揃える（Y=旧Z高さ, Z=-旧Y）。
+  // これによりOrbitControlsのデフォルト挙動のまま、水平ドラッグが正しく鉛直軸回りの回転になる。
+  {
+    const pos = geometry.getAttribute('position');
+    const arr = pos.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      const oy = arr[i + 1];
+      const oz = arr[i + 2];
+      arr[i + 1] = oz;
+      arr[i + 2] = -oy;
+    }
+    pos.needsUpdate = true;
+  }
+
   if (pointCloud) {
     scene.remove(pointCloud);
     pointCloud.geometry.dispose();
     pointCloud.material.dispose();
   }
   clearMeasurements();
+  clearArea();
+  clearPins();
+  setActiveTool('none');
 
   const hasColor = !!geometry.getAttribute('color');
   const material = new THREE.PointsMaterial({
@@ -282,33 +363,60 @@ async function loadInitial() {
 }
 
 // ------------------------------------------------------------------
-// 距離測定機能
+// クリック系ツールの排他制御 + 共通ポインタ処理
 // ------------------------------------------------------------------
-function setupMeasurement() {
-  measureBtn.addEventListener('click', () => {
-    measureMode = !measureMode;
-    measureBtn.textContent = `📏 距離測定: ${measureMode ? 'ON' : 'OFF'}`;
-    measureBtn.classList.toggle('active', measureMode);
-    measureHint.style.display = measureMode ? 'block' : 'none';
-    if (!measureMode) cancelPending();
-  });
+function setActiveTool(tool) {
+  measureMode = false;
+  measureBtn.textContent = '📏 距離測定: OFF';
+  measureBtn.classList.remove('active');
+  measureHint.style.display = 'none';
+  cancelPending();
 
-  clearBtn.addEventListener('click', clearMeasurements);
+  areaModeBtn.textContent = '📐 面積/体積: OFF';
+  areaModeBtn.classList.remove('active');
+  areaHint.style.display = 'none';
+  areaFinishBtn.style.display = 'none';
 
+  pinModeBtn.textContent = '📌 ピン留め: OFF';
+  pinModeBtn.classList.remove('active');
+  pinHint.style.display = 'none';
+
+  activeTool = tool;
+
+  if (tool === 'measure') {
+    measureMode = true;
+    measureBtn.textContent = '📏 距離測定: ON';
+    measureBtn.classList.add('active');
+    measureHint.style.display = 'block';
+  } else if (tool === 'area') {
+    areaModeBtn.textContent = '📐 面積/体積: ON';
+    areaModeBtn.classList.add('active');
+    areaHint.style.display = 'block';
+    if (areaPoints.length >= 3 && !areaFinished) areaFinishBtn.style.display = 'inline-block';
+  } else if (tool === 'pin') {
+    pinModeBtn.textContent = '📌 ピン留め: ON';
+    pinModeBtn.classList.add('active');
+    pinHint.style.display = 'block';
+  }
+}
+
+function setupInteraction() {
   let downPos = null;
   renderer.domElement.addEventListener('pointerdown', (e) => {
     downPos = { x: e.clientX, y: e.clientY };
   });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!measureMode || !pointCloud || !downPos) { downPos = null; return; }
+    if (!pointCloud || !downPos) { downPos = null; return; }
     const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
     downPos = null;
     if (moved > 5) return; // ドラッグ（回転操作）とみなしクリック扱いしない
-    handleMeasureClick(e);
+    if (activeTool === 'measure') handleMeasureClick(e);
+    else if (activeTool === 'area') handleAreaClick(e);
+    else if (activeTool === 'pin') handlePinClick(e);
   });
 }
 
-function handleMeasureClick(e) {
+function raycastFromEvent(e) {
   const rect = renderer.domElement.getBoundingClientRect();
   const mouse = new THREE.Vector2(
     ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -316,8 +424,20 @@ function handleMeasureClick(e) {
   );
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObject(pointCloud);
-  if (hits.length === 0) return;
-  const point = hits[0].point.clone();
+  return hits.length ? hits[0].point.clone() : null;
+}
+
+// ------------------------------------------------------------------
+// 距離測定機能
+// ------------------------------------------------------------------
+function setupMeasurement() {
+  measureBtn.addEventListener('click', () => setActiveTool(activeTool === 'measure' ? 'none' : 'measure'));
+  clearBtn.addEventListener('click', clearMeasurements);
+}
+
+function handleMeasureClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
 
   if (!pendingPoint) {
     pendingPoint = point;
@@ -402,6 +522,186 @@ function updateAllLabels() {
     m.label.style.top = p.y + 'px';
     m.label.style.display = p.visible ? 'block' : 'none';
   }
+
+  if (areaLabel && areaLabel._centroid) {
+    const p = projectToScreen(areaLabel._centroid);
+    areaLabel.style.left = p.x + 'px';
+    areaLabel.style.top = p.y + 'px';
+    areaLabel.style.display = p.visible ? 'block' : 'none';
+  }
+
+  for (const pin of pins) {
+    const p = projectToScreen(pin.position);
+    pin.label.style.left = p.x + 'px';
+    pin.label.style.top = p.y + 'px';
+    pin.label.style.display = p.visible ? 'block' : 'none';
+  }
+}
+
+// ------------------------------------------------------------------
+// 面積/体積計測機能（多角形の頂点をクリックで指定 → 水平投影面積とおおまかな体積を算出）
+// ------------------------------------------------------------------
+function setupAreaTool() {
+  areaModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'area' ? 'none' : 'area'));
+  areaFinishBtn.addEventListener('click', finishAreaPolygon);
+  areaClearBtn.addEventListener('click', clearArea);
+  baseHeightInput.addEventListener('input', updateAreaResult);
+}
+
+function handleAreaClick(e) {
+  if (areaFinished) return; // 確定後に続けたい場合はクリアしてやり直す
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  areaPoints.push(point);
+  const marker = makeMarker(point, 0x50ff90);
+  scene.add(marker);
+  areaMarkers.push(marker);
+
+  updateAreaLine(areaPoints);
+  areaFinishBtn.style.display = areaPoints.length >= 3 ? 'inline-block' : 'none';
+}
+
+function updateAreaLine(points) {
+  if (areaLine) {
+    scene.remove(areaLine);
+    areaLine.geometry.dispose();
+    areaLine.material.dispose();
+    areaLine = null;
+  }
+  if (points.length < 2) return;
+  const geom = new THREE.BufferGeometry().setFromPoints(points);
+  areaLine = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x50ff90 }));
+  scene.add(areaLine);
+}
+
+function finishAreaPolygon() {
+  if (areaPoints.length < 3 || areaFinished) return;
+  areaFinished = true;
+  areaFinishBtn.style.display = 'none';
+
+  // 多角形を閉じたラインとして再描画
+  updateAreaLine(areaPoints.concat([areaPoints[0]]));
+
+  // 水平投影面積（シューレースの公式、XZ平面に投影。Yは高さ扱い）
+  let sum = 0;
+  for (let i = 0; i < areaPoints.length; i++) {
+    const p1 = areaPoints[i];
+    const p2 = areaPoints[(i + 1) % areaPoints.length];
+    sum += p1.x * p2.z - p2.x * p1.z;
+  }
+  areaValue = Math.abs(sum) / 2;
+  areaAvgZ = areaPoints.reduce((s, p) => s + p.y, 0) / areaPoints.length;
+  const minZ = Math.min(...areaPoints.map(p => p.y));
+
+  baseHeightRow.style.display = 'flex';
+  baseHeightInput.value = minZ.toFixed(2);
+
+  const centroid = areaPoints
+    .reduce((acc, p) => acc.add(p), new THREE.Vector3())
+    .multiplyScalar(1 / areaPoints.length);
+  areaLabel = document.createElement('div');
+  areaLabel.className = 'areaLabel';
+  areaLabel._centroid = centroid;
+  document.body.appendChild(areaLabel);
+
+  updateAreaResult();
+}
+
+function updateAreaResult() {
+  if (!areaFinished) return;
+  const baseH = parseFloat(baseHeightInput.value);
+  const volume = areaValue * Math.abs(areaAvgZ - (isNaN(baseH) ? areaAvgZ : baseH));
+  areaResult.style.display = 'block';
+  areaResult.textContent = `面積: ${areaValue.toFixed(2)} m²　体積: ${volume.toFixed(2)} m³`;
+  if (areaLabel) areaLabel.textContent = `${areaValue.toFixed(1)}m² / ${volume.toFixed(1)}m³`;
+}
+
+function clearArea() {
+  for (const m of areaMarkers) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  areaMarkers = [];
+  if (areaLine) { scene.remove(areaLine); areaLine.geometry.dispose(); areaLine.material.dispose(); areaLine = null; }
+  if (areaLabel) { areaLabel.remove(); areaLabel = null; }
+  areaPoints = [];
+  areaFinished = false;
+  areaValue = 0;
+  areaAvgZ = 0;
+  areaFinishBtn.style.display = 'none';
+  areaResult.style.display = 'none';
+  baseHeightRow.style.display = 'none';
+}
+
+// ------------------------------------------------------------------
+// 注記ピン機能（クリックした位置にメモ付きのピンを立てる）
+// ------------------------------------------------------------------
+function setupPinTool() {
+  pinModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'pin' ? 'none' : 'pin'));
+  pinClearBtn.addEventListener('click', clearPins);
+}
+
+function handlePinClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  const note = window.prompt('メモを入力してください(空欄可):', '');
+  if (note === null) return; // キャンセル
+
+  const marker = makeMarker(point, 0xffa500);
+  scene.add(marker);
+
+  const label = document.createElement('div');
+  label.className = 'pinLabel';
+  document.body.appendChild(label);
+
+  pins.push({ marker, label, note, position: point });
+  relabelPins();
+  renderPinList();
+}
+
+function relabelPins() {
+  pins.forEach((p, i) => {
+    p.label.textContent = `📌${i + 1}` + (p.note ? `: ${p.note}` : '');
+  });
+}
+
+function renderPinList() {
+  pinList.innerHTML = pins.map((p, i) => `
+    <div>
+      <span>📌${i + 1}</span>
+      <span class="pinNote">${escapeHtml(p.note || '(メモなし)')}</span>
+      <button data-idx="${i}" class="pinDelBtn">×</button>
+    </div>
+  `).join('');
+  pinList.querySelectorAll('.pinDelBtn').forEach(btn => {
+    btn.addEventListener('click', () => removePin(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function removePin(idx) {
+  const p = pins[idx];
+  if (!p) return;
+  scene.remove(p.marker);
+  p.marker.geometry.dispose();
+  p.marker.material.dispose();
+  p.label.remove();
+  pins.splice(idx, 1);
+  relabelPins();
+  renderPinList();
+}
+
+function clearPins() {
+  for (const p of pins) {
+    scene.remove(p.marker);
+    p.marker.geometry.dispose();
+    p.marker.material.dispose();
+    p.label.remove();
+  }
+  pins.length = 0;
+  renderPinList();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // ------------------------------------------------------------------
