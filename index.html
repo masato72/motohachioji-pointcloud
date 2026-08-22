@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>点群ビューア - motohachioji</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; font-family: -apple-system, "Segoe UI", sans-serif; }
+  #container { position: absolute; inset: 0; }
+  #overlay {
+    position: absolute; top: 12px; left: 12px; z-index: 10;
+    background: rgba(20,20,20,0.8); color: #eee; padding: 10px 14px;
+    border-radius: 8px; font-size: 13px; line-height: 1.6; width: 300px;
+    backdrop-filter: blur(4px);
+  }
+  #overlay b { color: #fff; }
+  #overlay hr { border: none; border-top: 1px solid #444; margin: 8px 0; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .row label { flex: 0 0 auto; color: #ccc; font-size: 12px; }
+  .row input[type=range] { flex: 1 1 auto; }
+  .row select {
+    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 3px 6px;
+  }
+  .sizeVal { width: 52px; text-align: right; font-family: monospace; font-size: 12px; color: #9cf; }
+  button {
+    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { background: #383838; }
+  button.active { background: #2f6fb3; border-color: #4a90d9; color: #fff; }
+  #measureList { max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-top: 6px; }
+  #measureList div { display: flex; justify-content: space-between; padding: 1px 0; color: #ddd; }
+  #loading {
+    position: absolute; inset: 0; z-index: 30; display: flex;
+    align-items: center; justify-content: center; color: #eee;
+    background: rgba(0,0,0,0.6); font-size: 15px;
+  }
+  #loading.hide { display: none; }
+  #stats {
+    position: absolute; bottom: 10px; left: 12px; z-index: 10;
+    color: #999; font-size: 12px; font-family: monospace;
+  }
+  .measureLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    background: rgba(255, 210, 0, 0.9); color: #111; font-weight: 600;
+    font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="container"></div>
+
+<div id="overlay">
+  <div><b>点群ビューア</b></div>
+  <div>左ドラッグ: 回転 / 右ドラッグ: 移動 / ホイール: ズーム</div>
+  <div id="pointInfo">読み込み中...</div>
+  <hr>
+  <div class="row">
+    <label>点サイズ</label>
+    <input type="range" id="sizeSlider" min="1" max="100" value="30">
+    <span class="sizeVal" id="sizeVal">-</span>
+  </div>
+  <hr>
+  <div class="row">
+    <button id="measureBtn">📏 距離測定: OFF</button>
+    <button id="clearBtn">クリア</button>
+  </div>
+  <div id="measureHint" style="color:#999; font-size:11px; display:none;">
+    点群上を2回クリックして2点間の距離を測定します
+  </div>
+  <div id="measureList"></div>
+  <hr>
+  <div class="row">
+    <button id="clipToggleBtn">✂️ 断面カット: OFF</button>
+    <button id="clipFlipBtn">反転</button>
+  </div>
+  <div class="row" id="clipAxisRow" style="display:none;">
+    <label>軸</label>
+    <select id="clipAxis">
+      <option value="x">X</option>
+      <option value="y">Y</option>
+      <option value="z">Z (高さ)</option>
+    </select>
+  </div>
+  <div class="row" id="clipPosRow" style="display:none;">
+    <label>位置</label>
+    <input type="range" id="clipSlider" min="0" max="1000" value="500">
+    <span class="sizeVal" id="clipVal">-</span>
+  </div>
+</div>
+
+<div id="stats"></div>
+
+<div id="loading">点群を読み込み中...</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+const PLY_FILE = 'motohachioji_light_4cm.ply';
+
+const loading = document.getElementById('loading');
+const pointInfo = document.getElementById('pointInfo');
+const statsEl = document.getElementById('stats');
+const sizeSlider = document.getElementById('sizeSlider');
+const sizeVal = document.getElementById('sizeVal');
+const measureBtn = document.getElementById('measureBtn');
+const clearBtn = document.getElementById('clearBtn');
+const measureHint = document.getElementById('measureHint');
+const measureList = document.getElementById('measureList');
+const clipToggleBtn = document.getElementById('clipToggleBtn');
+const clipFlipBtn = document.getElementById('clipFlipBtn');
+const clipAxisRow = document.getElementById('clipAxisRow');
+const clipAxisSelect = document.getElementById('clipAxis');
+const clipPosRow = document.getElementById('clipPosRow');
+const clipSlider = document.getElementById('clipSlider');
+const clipVal = document.getElementById('clipVal');
+
+let scene, camera, renderer, controls, pointCloud, raycaster;
+let sceneScale = 1; // バウンディングスフィア半径。サイズ調整の基準にする
+let measureMode = false;
+let pendingPoint = null;   // 測定中の1点目
+let pendingMarker = null;
+const measurements = []; // {a, b, markerA, markerB, line, label, dist}
+
+let clipEnabled = false;
+let clipFlip = false;
+const clipPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+let clipBounds = null; // 現在の点群のバウンディングボックス（センタリング後）
+
+function createCircleTexture() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.75, 'rgba(255,255,255,1)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+const circleTexture = createCircleTexture();
+
+function initScene() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 10000);
+  camera.position.set(0, 0, 5);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.localClippingEnabled = true;
+  document.getElementById('container').appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  raycaster = new THREE.Raycaster();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  setupMeasurement();
+  setupClipping();
+  animate();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+  updateAllLabels();
+}
+
+function loadPlyArrayBuffer(arrayBuffer, label) {
+  const loader = new PLYLoader();
+  const geometry = loader.parse(arrayBuffer);
+
+  if (pointCloud) {
+    scene.remove(pointCloud);
+    pointCloud.geometry.dispose();
+    pointCloud.material.dispose();
+  }
+  clearMeasurements();
+
+  const hasColor = !!geometry.getAttribute('color');
+  const material = new THREE.PointsMaterial({
+    sizeAttenuation: true,
+    vertexColors: hasColor,
+    color: hasColor ? 0xffffff : 0xb4b4b4,
+    map: circleTexture,
+    alphaTest: 0.4,
+    transparent: false,
+    clippingPlanes: [],
+  });
+
+  // PLYLoaderは0-255のuint8色を0-1に正規化しないことがあるため補正
+  const colorAttr = geometry.getAttribute('color');
+  if (colorAttr && colorAttr.array instanceof Uint8Array) {
+    const normalized = new Float32Array(colorAttr.array.length);
+    for (let i = 0; i < colorAttr.array.length; i++) {
+      normalized[i] = colorAttr.array[i] / 255;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(normalized, 3));
+  }
+
+  pointCloud = new THREE.Points(geometry, material);
+
+  // 中心をシーン原点へ、カメラをバウンディングスフィアに合わせて配置
+  geometry.center();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+
+  const sphere = geometry.boundingSphere;
+  sceneScale = sphere ? sphere.radius : 5;
+  const dist = sceneScale * 2.2;
+  camera.position.set(dist * 0.5, dist * 0.3, dist);
+  camera.near = Math.max(dist / 2000, 0.001);
+  camera.far = dist * 20;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  scene.add(pointCloud);
+
+  // 点の見た目サイズをシーン規模に応じて初期化
+  sizeSlider.value = 30;
+  applyPointSize();
+
+  // 断面カットの基準となるバウンディングボックスをリセット
+  clipBounds = geometry.boundingBox.clone();
+  resetClipping();
+
+  const count = geometry.getAttribute('position').count;
+  pointInfo.textContent = `${label}: ${count.toLocaleString()} 点`;
+  statsEl.textContent = `points: ${count.toLocaleString()}`;
+}
+
+function applyPointSize() {
+  if (!pointCloud) return;
+  const t = sizeSlider.value / 100; // 0.01 - 1.0
+  const size = sceneScale * (0.0008 + t * 0.012);
+  pointCloud.material.size = size;
+  raycaster.params.Points.threshold = size * 1.5;
+  sizeVal.textContent = (size * 100).toFixed(1) + 'cm';
+}
+sizeSlider.addEventListener('input', applyPointSize);
+
+async function loadInitial() {
+  try {
+    const res = await fetch(PLY_FILE);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    loadPlyArrayBuffer(buf, PLY_FILE);
+  } catch (e) {
+    pointInfo.textContent = '読み込みエラー: ' + e.message;
+  } finally {
+    loading.classList.add('hide');
+  }
+}
+
+// ------------------------------------------------------------------
+// 距離測定機能
+// ------------------------------------------------------------------
+function setupMeasurement() {
+  measureBtn.addEventListener('click', () => {
+    measureMode = !measureMode;
+    measureBtn.textContent = `📏 距離測定: ${measureMode ? 'ON' : 'OFF'}`;
+    measureBtn.classList.toggle('active', measureMode);
+    measureHint.style.display = measureMode ? 'block' : 'none';
+    if (!measureMode) cancelPending();
+  });
+
+  clearBtn.addEventListener('click', clearMeasurements);
+
+  let downPos = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    downPos = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!measureMode || !pointCloud || !downPos) { downPos = null; return; }
+    const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+    downPos = null;
+    if (moved > 5) return; // ドラッグ（回転操作）とみなしクリック扱いしない
+    handleMeasureClick(e);
+  });
+}
+
+function handleMeasureClick(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObject(pointCloud);
+  if (hits.length === 0) return;
+  const point = hits[0].point.clone();
+
+  if (!pendingPoint) {
+    pendingPoint = point;
+    pendingMarker = makeMarker(point, 0xff5050);
+    scene.add(pendingMarker);
+  } else {
+    const a = pendingPoint;
+    const b = point;
+    const markerA = pendingMarker;
+    const markerB = makeMarker(b, 0xff5050);
+    scene.add(markerB);
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffd200 }));
+    scene.add(line);
+
+    const dist = a.distanceTo(b);
+    const label = document.createElement('div');
+    label.className = 'measureLabel';
+    label.textContent = `${dist.toFixed(3)} m`;
+    document.body.appendChild(label);
+
+    measurements.push({ a, b, markerA, markerB, line, label, dist });
+    renderMeasureList();
+
+    pendingPoint = null;
+    pendingMarker = null;
+  }
+}
+
+function makeMarker(pos, color) {
+  const geom = new THREE.SphereGeometry(Math.max(sceneScale / 250, 0.005), 12, 12);
+  const mat = new THREE.MeshBasicMaterial({ color });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.copy(pos);
+  return mesh;
+}
+
+function cancelPending() {
+  if (pendingMarker) {
+    scene.remove(pendingMarker);
+    pendingMarker.geometry.dispose();
+    pendingMarker.material.dispose();
+  }
+  pendingPoint = null;
+  pendingMarker = null;
+}
+
+function clearMeasurements() {
+  cancelPending();
+  for (const m of measurements) {
+    scene.remove(m.markerA, m.markerB, m.line);
+    m.markerA.geometry.dispose(); m.markerA.material.dispose();
+    m.markerB.geometry.dispose(); m.markerB.material.dispose();
+    m.line.geometry.dispose(); m.line.material.dispose();
+    m.label.remove();
+  }
+  measurements.length = 0;
+  renderMeasureList();
+}
+
+function renderMeasureList() {
+  measureList.innerHTML = measurements
+    .map((m, i) => `<div><span>#${i + 1}</span><span>${m.dist.toFixed(3)} m</span></div>`)
+    .join('');
+}
+
+function projectToScreen(worldPos) {
+  const v = worldPos.clone().project(camera);
+  return {
+    x: (v.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-v.y * 0.5 + 0.5) * window.innerHeight,
+    visible: v.z < 1,
+  };
+}
+
+function updateAllLabels() {
+  for (const m of measurements) {
+    const mid = m.a.clone().add(m.b).multiplyScalar(0.5);
+    const p = projectToScreen(mid);
+    m.label.style.left = p.x + 'px';
+    m.label.style.top = p.y + 'px';
+    m.label.style.display = p.visible ? 'block' : 'none';
+  }
+}
+
+// ------------------------------------------------------------------
+// 断面カット機能（軸に沿ったクリッピング平面で点群を切断表示）
+// ------------------------------------------------------------------
+function setupClipping() {
+  clipToggleBtn.addEventListener('click', () => {
+    clipEnabled = !clipEnabled;
+    clipToggleBtn.textContent = `✂️ 断面カット: ${clipEnabled ? 'ON' : 'OFF'}`;
+    clipToggleBtn.classList.toggle('active', clipEnabled);
+    clipAxisRow.style.display = clipEnabled ? 'flex' : 'none';
+    clipPosRow.style.display = clipEnabled ? 'flex' : 'none';
+    updateClipPlane();
+  });
+
+  clipFlipBtn.addEventListener('click', () => {
+    clipFlip = !clipFlip;
+    updateClipPlane();
+  });
+
+  clipAxisSelect.addEventListener('change', updateClipPlane);
+  clipSlider.addEventListener('input', updateClipPlane);
+}
+
+function resetClipping() {
+  clipEnabled = false;
+  clipFlip = false;
+  clipToggleBtn.textContent = '✂️ 断面カット: OFF';
+  clipToggleBtn.classList.remove('active');
+  clipAxisRow.style.display = 'none';
+  clipPosRow.style.display = 'none';
+  clipAxisSelect.value = 'x';
+  clipSlider.value = 500;
+  updateClipPlane();
+}
+
+function updateClipPlane() {
+  if (!pointCloud || !clipBounds) return;
+  const axis = clipAxisSelect.value;
+  const min = clipBounds.min[axis];
+  const max = clipBounds.max[axis];
+  const t = clipSlider.value / 1000;
+  const pos = min + t * (max - min);
+
+  const sign = clipFlip ? -1 : 1;
+  clipPlane.normal.set(
+    axis === 'x' ? sign : 0,
+    axis === 'y' ? sign : 0,
+    axis === 'z' ? sign : 0
+  );
+  clipPlane.constant = -sign * pos;
+
+  pointCloud.material.clippingPlanes = clipEnabled ? [clipPlane] : [];
+  clipVal.textContent = pos.toFixed(2) + 'm';
+}
+
+initScene();
+loadInitial();
+</script>
+</body>
+</html>
