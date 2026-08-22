@@ -8,37 +8,37 @@
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; font-family: -apple-system, "Segoe UI", sans-serif; }
   #container { position: absolute; inset: 0; }
   #overlay {
-    position: absolute; top: 12px; left: 12px; z-index: 10;
-    background: rgba(20,20,20,0.8); color: #eee; padding: 10px 14px;
-    border-radius: 8px; font-size: 13px; line-height: 1.6; width: 300px;
-    max-width: calc(100vw - 24px);
+    position: absolute; top: 10px; left: 10px; z-index: 10;
+    background: rgba(20,20,20,0.8); color: #eee; padding: 7px 10px;
+    border-radius: 8px; font-size: 11.5px; line-height: 1.4; width: 250px;
+    max-width: calc(100vw - 20px);
     backdrop-filter: blur(4px);
   }
   #overlay b { color: #fff; user-select: none; -webkit-user-select: none; }
   .overlayHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   #collapseBtn {
-    padding: 0; width: 44px; height: 44px; font-size: 18px; line-height: 1;
+    padding: 0; width: 40px; height: 40px; font-size: 16px; line-height: 1;
     flex: 0 0 auto; touch-action: manipulation;
   }
-  #overlay.collapsed { width: auto; padding: 4px 8px; }
+  #overlay.collapsed { width: auto; padding: 4px 6px; }
   #overlay.collapsed #overlayBody { display: none; }
   #overlay.collapsed #collapseBtn { width: 40px; height: 40px; }
-  #overlay hr { border: none; border-top: 1px solid #444; margin: 8px 0; }
-  .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
-  .row label { flex: 0 0 auto; color: #ccc; font-size: 12px; }
+  #overlay hr { border: none; border-top: 1px solid #444; margin: 5px 0; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .row label { flex: 0 0 auto; color: #ccc; font-size: 11px; }
   .row input[type=range] { flex: 1 1 auto; }
   .row select {
-    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 3px 6px;
+    background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 2px 5px; font-size: 11px;
   }
-  .sizeVal { width: 52px; text-align: right; font-family: monospace; font-size: 12px; color: #9cf; }
+  .sizeVal { width: 46px; text-align: right; font-family: monospace; font-size: 11px; color: #9cf; }
   button {
     background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px;
-    padding: 5px 10px; font-size: 12px; cursor: pointer; touch-action: manipulation;
+    padding: 4px 8px; font-size: 11px; cursor: pointer; touch-action: manipulation;
   }
   button:hover { background: #383838; }
   button.active { background: #2f6fb3; border-color: #4a90d9; color: #fff; }
-  #measureList { max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 6px; }
-  #measureList .measureRow { padding: 3px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
+  #measureList { max-height: 110px; overflow-y: auto; font-family: monospace; font-size: 10px; margin-top: 4px; }
+  #measureList .measureRow { padding: 2px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
   #loading {
     position: absolute; inset: 0; z-index: 30; display: flex;
     align-items: center; justify-content: center; color: #eee;
@@ -63,22 +63,22 @@
   .areaLabel { background: rgba(90, 230, 140, 0.92); color: #111; }
   .volumeLabel { background: rgba(90, 170, 255, 0.92); color: #111; }
   .pinLabel { background: rgba(255, 160, 0, 0.95); color: #111; }
-  #areaResult { font-size: 12px; color: #8f8; margin: 4px 0; }
-  #volumeResult { font-size: 12px; color: #8cf; margin: 4px 0; }
-  #pinList { max-height: 130px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-top: 6px; }
+  #areaResult { font-size: 11px; color: #8f8; margin: 3px 0; }
+  #volumeResult { font-size: 11px; color: #8cf; margin: 3px 0; }
+  #pinList { max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 4px; }
   #pinList div { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: #ddd; }
   #pinList .pinNote { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pinList button { padding: 1px 7px; font-size: 11px; }
+  #pinList button { padding: 1px 7px; font-size: 10px; }
   .coordLabel {
     position: absolute; z-index: 15; transform: translate(-50%, -100%);
     background: rgba(0, 220, 255, 0.92); color: #111; font-weight: 600;
     font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
     pointer-events: none;
   }
-  #coordList { max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 6px; }
-  #coordList .coordRow { display: flex; align-items: center; gap: 4px; padding: 3px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
-  #coordList .coordXYZ { flex: 1 1 auto; line-height: 1.4; }
-  #coordList button { padding: 1px 7px; font-size: 11px; }
+  #coordList { max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 10px; margin-top: 4px; }
+  #coordList .coordRow { display: flex; align-items: center; gap: 4px; padding: 2px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
+  #coordList .coordXYZ { flex: 1 1 auto; line-height: 1.35; }
+  #coordList button { padding: 1px 7px; font-size: 10px; }
 </style>
 </head>
 <body>
@@ -159,8 +159,8 @@
     <label>軸</label>
     <select id="clipAxis">
       <option value="x">X</option>
-      <option value="y">Y (高さ)</option>
-      <option value="z">Z</option>
+      <option value="y">Y</option>
+      <option value="z">Z (高さ)</option>
     </select>
   </div>
   <div class="row" id="clipPosRow" style="display:none;">
@@ -927,9 +927,12 @@ function resetClipping() {
   updateClipPlane();
 }
 
+// 表示上の軸(元データの測量座標系。Zが高さ)を、内部Three.js座標系(Y-up)のプロパティ名へ変換
+const CLIP_AXIS_MAP = { x: 'x', y: 'z', z: 'y' };
+
 function updateClipPlane() {
   if (!pointCloud || !clipBounds) return;
-  const axis = clipAxisSelect.value;
+  const axis = CLIP_AXIS_MAP[clipAxisSelect.value];
   const min = clipBounds.min[axis];
   const max = clipBounds.max[axis];
   const t = clipSlider.value / 1000;
