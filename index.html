@@ -60,6 +60,16 @@
   #pinList div { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: #ddd; }
   #pinList .pinNote { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #pinList button { padding: 1px 7px; font-size: 11px; }
+  .coordLabel {
+    position: absolute; z-index: 15; transform: translate(-50%, -100%);
+    background: rgba(0, 220, 255, 0.92); color: #111; font-weight: 600;
+    font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    pointer-events: none;
+  }
+  #coordList { max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 6px; }
+  #coordList .coordRow { display: flex; align-items: center; gap: 4px; padding: 3px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
+  #coordList .coordXYZ { flex: 1 1 auto; line-height: 1.4; }
+  #coordList button { padding: 1px 7px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -118,6 +128,15 @@
     点群上をクリックしてピンを追加し、メモを入力します
   </div>
   <div id="pinList"></div>
+  <hr>
+  <div class="row">
+    <button id="coordModeBtn">📍 座標表示: OFF</button>
+    <button id="coordClearBtn">クリア</button>
+  </div>
+  <div id="coordHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックすると、その点のX,Y,Z座標(元データの測量座標系)を表示します
+  </div>
+  <div id="coordList"></div>
   <hr>
   <div class="row">
     <button id="clipToggleBtn">✂️ 断面カット: OFF</button>
@@ -189,6 +208,10 @@ const pinModeBtn = document.getElementById('pinModeBtn');
 const pinClearBtn = document.getElementById('pinClearBtn');
 const pinHint = document.getElementById('pinHint');
 const pinList = document.getElementById('pinList');
+const coordModeBtn = document.getElementById('coordModeBtn');
+const coordClearBtn = document.getElementById('coordClearBtn');
+const coordHint = document.getElementById('coordHint');
+const coordList = document.getElementById('coordList');
 
 let scene, camera, renderer, controls, pointCloud, raycaster;
 let sceneScale = 1; // バウンディングスフィア半径。サイズ調整の基準にする
@@ -218,6 +241,10 @@ const volumeTool = makePolygonTool({
 
 // 注記ピン
 const pins = []; // {marker, label, note, position}
+
+// 座標表示（Y-up変換・中心化前の元の測量座標系に戻して表示する）
+let originOffset = new THREE.Vector3(); // center()で差し引かれたオフセット（変換後・中心化前の座標系）
+const coordPoints = []; // {marker, label, position, orig: {x,y,z}}
 
 let clipEnabled = false;
 let clipFlip = false;
@@ -268,6 +295,7 @@ function initScene() {
   setupPolygonTool(areaTool);
   setupPolygonTool(volumeTool);
   setupPinTool();
+  setupCoordTool();
   setupInteraction();
   setupClipping();
   animate();
@@ -282,83 +310,87 @@ function animate() {
 
 function loadPlyArrayBuffer(arrayBuffer, label) {
   const loader = new PLYLoader();
-  const geometry = loader.parse(arrayBuffer);
+    const geometry = loader.parse(arrayBuffer);
 
-  // 点群データは高さ方向がZ軸（測量系）だが、Three.js/OrbitControlsの標準はY-upなので
-  // 読み込み時に-90°X回転して座標をY-upへ揃える（Y=旧Z高さ, Z=-旧Y）。
-  // これによりOrbitControlsのデフォルト挙動のまま、水平ドラッグが正しく鉛直軸回りの回転になる。
-  {
-    const pos = geometry.getAttribute('position');
-    const arr = pos.array;
-    for (let i = 0; i < arr.length; i += 3) {
-      const oy = arr[i + 1];
-      const oz = arr[i + 2];
-      arr[i + 1] = oz;
-      arr[i + 2] = -oy;
+    // 点群データは高さ方向がZ軸（測量系）だが、Three.js/OrbitControlsの標準はY-upなので
+    // 読み込み時に-90°X回転して座標をY-upへ揃える（Y=旧Z高さ, Z=-旧Y）。
+    // これによりOrbitControlsのデフォルト挙動のまま、水平ドラッグが正しく鉛直軸回りの回転になる。
+    {
+      const pos = geometry.getAttribute('position');
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const oy = arr[i + 1];
+        const oz = arr[i + 2];
+        arr[i + 1] = oz;
+        arr[i + 2] = -oy;
+      }
+      pos.needsUpdate = true;
     }
-    pos.needsUpdate = true;
-  }
 
-  if (pointCloud) {
-    scene.remove(pointCloud);
-    pointCloud.geometry.dispose();
-    pointCloud.material.dispose();
-  }
-  clearMeasurements();
-  clearPolygonTool(areaTool);
-  clearPolygonTool(volumeTool);
-  clearPins();
-  setActiveTool('none');
-
-  const hasColor = !!geometry.getAttribute('color');
-  const material = new THREE.PointsMaterial({
-    sizeAttenuation: true,
-    vertexColors: hasColor,
-    color: hasColor ? 0xffffff : 0xb4b4b4,
-    map: circleTexture,
-    alphaTest: 0.4,
-    transparent: false,
-    clippingPlanes: [],
-  });
-
-  // PLYLoaderは0-255のuint8色を0-1に正規化しないことがあるため補正
-  const colorAttr = geometry.getAttribute('color');
-  if (colorAttr && colorAttr.array instanceof Uint8Array) {
-    const normalized = new Float32Array(colorAttr.array.length);
-    for (let i = 0; i < colorAttr.array.length; i++) {
-      normalized[i] = colorAttr.array[i] / 255;
+    if (pointCloud) {
+      scene.remove(pointCloud);
+      pointCloud.geometry.dispose();
+      pointCloud.material.dispose();
     }
-    geometry.setAttribute('color', new THREE.BufferAttribute(normalized, 3));
-  }
+    clearMeasurements();
+    clearPolygonTool(areaTool);
+    clearPolygonTool(volumeTool);
+    clearPins();
+    clearCoords();
+    setActiveTool('none');
 
-  pointCloud = new THREE.Points(geometry, material);
+    const hasColor = !!geometry.getAttribute('color');
+    const material = new THREE.PointsMaterial({
+      sizeAttenuation: true,
+      vertexColors: hasColor,
+      color: hasColor ? 0xffffff : 0xb4b4b4,
+      map: circleTexture,
+      alphaTest: 0.4,
+      transparent: false,
+      clippingPlanes: [],
+    });
 
-  // 中心をシーン原点へ、カメラをバウンディングスフィアに合わせて配置
-  geometry.center();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
+    // PLYLoaderは0-255のuint8色を0-1に正規化しないことがあるため補正
+    const colorAttr = geometry.getAttribute('color');
+    if (colorAttr && colorAttr.array instanceof Uint8Array) {
+      const normalized = new Float32Array(colorAttr.array.length);
+      for (let i = 0; i < colorAttr.array.length; i++) {
+        normalized[i] = colorAttr.array[i] / 255;
+      }
+      geometry.setAttribute('color', new THREE.BufferAttribute(normalized, 3));
+    }
 
-  const sphere = geometry.boundingSphere;
-  sceneScale = sphere ? sphere.radius : 5;
-  const dist = sceneScale * 2.2;
-  camera.position.set(dist * 0.5, dist * 0.3, dist);
-  // 近接クリップ面はシーン規模に関係なく小さく固定し、地面や細部までズームインしても消えないようにする
-  camera.near = 0.005;
-  camera.far = dist * 20;
-  camera.updateProjectionMatrix();
-  controls.target.set(0, 0, 0);
-  controls.minDistance = 0.02;
-  controls.update();
+    pointCloud = new THREE.Points(geometry, material);
 
-  scene.add(pointCloud);
+    // 中心をシーン原点へ、カメラをバウンディングスフィアに合わせて配置
+    // 座標表示機能のため、中心化で差し引かれるオフセットを先に控えておく
+    geometry.computeBoundingBox();
+    geometry.boundingBox.getCenter(originOffset);
+    geometry.center();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
 
-  // 点の見た目サイズをシーン規模に応じて初期化
-  sizeSlider.value = 30;
-  applyPointSize();
+    const sphere = geometry.boundingSphere;
+    sceneScale = sphere ? sphere.radius : 5;
+    const dist = sceneScale * 2.2;
+    camera.position.set(dist * 0.5, dist * 0.3, dist);
+    // 近接クリップ面はシーン規模に関係なく小さく固定し、地面や細部までズームインしても消えないようにする
+    camera.near = 0.005;
+    camera.far = dist * 20;
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.minDistance = 0.02;
+    controls.update();
 
-  // 断面カットの基準となるバウンディングボックスをリセット
-  clipBounds = geometry.boundingBox.clone();
-  resetClipping();
+    scene.add(pointCloud);
+
+    // 点の見た目サイズをスケールに応じて初期化（隙間が目立たない程度に少し大きめ）
+    sizeSlider.value = 30;
+    applyPointSize();
+
+    // 断面カットの基準となるバウンディングボックスをリセット
+    clipBounds = geometry.boundingBox.clone();
+    resetClipping();
 
   const count = geometry.getAttribute('position').count;
   pointInfo.textContent = `${label}: ${count.toLocaleString()} 点`;
@@ -370,6 +402,7 @@ const MAX_POINT_SIZE = 0.08;  // 8cm
 
 function applyPointSize() {
   if (!pointCloud) return;
+  // スライダー(1-100)を、シーン規模によらず0.3cm〜8cmの絶対サイズへ変換
   const t = (sizeSlider.value - 1) / 99; // 0 - 1.0
   const size = MIN_POINT_SIZE + t * (MAX_POINT_SIZE - MIN_POINT_SIZE);
   pointCloud.material.size = size;
@@ -412,6 +445,10 @@ function setActiveTool(tool) {
   pinModeBtn.classList.remove('active');
   pinHint.style.display = 'none';
 
+  coordModeBtn.textContent = '📍 座標表示: OFF';
+  coordModeBtn.classList.remove('active');
+  coordHint.style.display = 'none';
+
   activeTool = tool;
 
   if (tool === 'measure') {
@@ -429,6 +466,10 @@ function setActiveTool(tool) {
     pinModeBtn.textContent = '📌 ピン留め: ON';
     pinModeBtn.classList.add('active');
     pinHint.style.display = 'block';
+  } else if (tool === 'coord') {
+    coordModeBtn.textContent = '📍 座標表示: ON';
+    coordModeBtn.classList.add('active');
+    coordHint.style.display = 'block';
   }
 }
 
@@ -446,6 +487,7 @@ function setupInteraction() {
     else if (activeTool === 'area') handlePolygonClick(e, areaTool);
     else if (activeTool === 'volume') handlePolygonClick(e, volumeTool);
     else if (activeTool === 'pin') handlePinClick(e);
+    else if (activeTool === 'coord') handleCoordClick(e);
   });
 }
 
@@ -570,6 +612,13 @@ function updateAllLabels() {
     pin.label.style.left = p.x + 'px';
     pin.label.style.top = p.y + 'px';
     pin.label.style.display = p.visible ? 'block' : 'none';
+  }
+
+  for (const cp of coordPoints) {
+    const p = projectToScreen(cp.position);
+    cp.label.style.left = p.x + 'px';
+    cp.label.style.top = p.y + 'px';
+    cp.label.style.display = p.visible ? 'block' : 'none';
   }
 }
 
@@ -745,6 +794,80 @@ function clearPins() {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ------------------------------------------------------------------
+// 座標表示機能（クリックした点の元データ座標系（X,Y,Z）を表示する）
+// ------------------------------------------------------------------
+function setupCoordTool() {
+  coordModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'coord' ? 'none' : 'coord'));
+  coordClearBtn.addEventListener('click', clearCoords);
+}
+
+// 表示用のY-up・中心化座標を、元データの測量座標系(X,Y,Z / Zが高さ)へ逆変換する
+function toOriginalCoords(point) {
+  const ux = point.x + originOffset.x;
+  const uy = point.y + originOffset.y;
+  const uz = point.z + originOffset.z;
+  return { x: ux, y: -uz, z: uy };
+}
+
+function handleCoordClick(e) {
+  const point = raycastFromEvent(e);
+  if (!point) return;
+
+  const orig = toOriginalCoords(point);
+  const marker = makeMarker(point, 0x00e5ff);
+  scene.add(marker);
+
+  const label = document.createElement('div');
+  label.className = 'coordLabel';
+  document.body.appendChild(label);
+
+  coordPoints.push({ marker, label, position: point, orig });
+  relabelCoords();
+  renderCoordList();
+}
+
+function relabelCoords() {
+  coordPoints.forEach((cp, i) => {
+    cp.label.textContent = `📍${i + 1}`;
+  });
+}
+
+function renderCoordList() {
+  coordList.innerHTML = coordPoints.map((cp, i) => `
+    <div class="coordRow">
+      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)}<br>Y: ${cp.orig.y.toFixed(3)}<br>Z: ${cp.orig.z.toFixed(3)}</span>
+      <button data-idx="${i}" class="coordDelBtn">×</button>
+    </div>
+  `).join('');
+  coordList.querySelectorAll('.coordDelBtn').forEach(btn => {
+    btn.addEventListener('click', () => removeCoord(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function removeCoord(idx) {
+  const cp = coordPoints[idx];
+  if (!cp) return;
+  scene.remove(cp.marker);
+  cp.marker.geometry.dispose();
+  cp.marker.material.dispose();
+  cp.label.remove();
+  coordPoints.splice(idx, 1);
+  relabelCoords();
+  renderCoordList();
+}
+
+function clearCoords() {
+  for (const cp of coordPoints) {
+    scene.remove(cp.marker);
+    cp.marker.geometry.dispose();
+    cp.marker.material.dispose();
+    cp.label.remove();
+  }
+  coordPoints.length = 0;
+  renderCoordList();
 }
 
 // ------------------------------------------------------------------
