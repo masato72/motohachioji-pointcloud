@@ -52,8 +52,10 @@
     white-space: nowrap; pointer-events: none;
   }
   .areaLabel { background: rgba(90, 230, 140, 0.92); color: #111; }
+  .volumeLabel { background: rgba(90, 170, 255, 0.92); color: #111; }
   .pinLabel { background: rgba(255, 160, 0, 0.95); color: #111; }
   #areaResult { font-size: 12px; color: #8f8; margin: 4px 0; }
+  #volumeResult { font-size: 12px; color: #8cf; margin: 4px 0; }
   #pinList { max-height: 130px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-top: 6px; }
   #pinList div { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: #ddd; }
   #pinList .pinNote { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -84,14 +86,24 @@
   <div id="measureList"></div>
   <hr>
   <div class="row">
-    <button id="areaModeBtn">📐 面積/体積: OFF</button>
+    <button id="areaModeBtn">📐 面積計測: OFF</button>
     <button id="areaFinishBtn" style="display:none;">確定</button>
     <button id="areaClearBtn">クリア</button>
   </div>
   <div id="areaHint" style="color:#999; font-size:11px; display:none;">
-    点群上をクリックして頂点を追加(3点以上)。「確定」で多角形を閉じます
+    点群上をクリックして頂点を追加(3点以上)。「確定」で多角形を閉じ、水平投影面積を計算します
   </div>
   <div id="areaResult" style="display:none;"></div>
+  <hr>
+  <div class="row">
+    <button id="volumeModeBtn">📦 体積計測: OFF</button>
+    <button id="volumeFinishBtn" style="display:none;">確定</button>
+    <button id="volumeClearBtn">クリア</button>
+  </div>
+  <div id="volumeHint" style="color:#999; font-size:11px; display:none;">
+    点群上をクリックして頂点を追加(3点以上)。「確定」後、基準高さを指定すると体積を計算します
+  </div>
+  <div id="volumeResult" style="display:none;"></div>
   <div class="row" id="baseHeightRow" style="display:none;">
     <label>基準高さ</label>
     <input type="number" id="baseHeightInput" step="0.01" style="width:80px; background:#2a2a2a; color:#eee; border:1px solid #555; border-radius:6px; padding:2px 6px;">
@@ -166,6 +178,11 @@ const areaFinishBtn = document.getElementById('areaFinishBtn');
 const areaClearBtn = document.getElementById('areaClearBtn');
 const areaHint = document.getElementById('areaHint');
 const areaResult = document.getElementById('areaResult');
+const volumeModeBtn = document.getElementById('volumeModeBtn');
+const volumeFinishBtn = document.getElementById('volumeFinishBtn');
+const volumeClearBtn = document.getElementById('volumeClearBtn');
+const volumeHint = document.getElementById('volumeHint');
+const volumeResult = document.getElementById('volumeResult');
 const baseHeightRow = document.getElementById('baseHeightRow');
 const baseHeightInput = document.getElementById('baseHeightInput');
 const pinModeBtn = document.getElementById('pinModeBtn');
@@ -175,21 +192,29 @@ const pinList = document.getElementById('pinList');
 
 let scene, camera, renderer, controls, pointCloud, raycaster;
 let sceneScale = 1; // バウンディングスフィア半径。サイズ調整の基準にする
-let activeTool = 'none'; // 'none' | 'measure' | 'area' | 'pin'（クリック系ツールは排他）
+let activeTool = 'none'; // 'none' | 'measure' | 'area' | 'volume' | 'pin'（クリック系ツールは排他）
 
 let measureMode = false;
 let pendingPoint = null;   // 測定中の1点目
 let pendingMarker = null;
 const measurements = []; // {a, b, markerA, markerB, line, label, dist}
 
-// 面積/体積計測
-let areaPoints = [];   // Vector3[]
-let areaMarkers = [];  // Mesh[]
-let areaLine = null;   // THREE.Line
-let areaLabel = null;  // 浮動ラベル div（._centroidに中心座標を保持）
-let areaFinished = false;
-let areaValue = 0;     // m^2
-let areaAvgZ = 0;
+// 面積計測・体積計測（別コマンドだが多角形クリックの仕組みは共通）
+function makePolygonTool(config) {
+  return Object.assign({
+    points: [], markers: [], line: null, label: null, finished: false, value: 0, avgH: 0,
+  }, config);
+}
+const areaTool = makePolygonTool({
+  key: 'area', color: 0x50ff90, labelClass: 'areaLabel',
+  modeBtn: areaModeBtn, finishBtn: areaFinishBtn, clearBtn: areaClearBtn,
+  hintEl: areaHint, resultEl: areaResult, showBaseHeight: false,
+});
+const volumeTool = makePolygonTool({
+  key: 'volume', color: 0x50a0ff, labelClass: 'volumeLabel',
+  modeBtn: volumeModeBtn, finishBtn: volumeFinishBtn, clearBtn: volumeClearBtn,
+  hintEl: volumeHint, resultEl: volumeResult, showBaseHeight: true,
+});
 
 // 注記ピン
 const pins = []; // {marker, label, note, position}
@@ -240,7 +265,8 @@ function initScene() {
   });
 
   setupMeasurement();
-  setupAreaTool();
+  setupPolygonTool(areaTool);
+  setupPolygonTool(volumeTool);
   setupPinTool();
   setupInteraction();
   setupClipping();
@@ -279,7 +305,8 @@ function loadPlyArrayBuffer(arrayBuffer, label) {
     pointCloud.material.dispose();
   }
   clearMeasurements();
-  clearArea();
+  clearPolygonTool(areaTool);
+  clearPolygonTool(volumeTool);
   clearPins();
   setActiveTool('none');
 
@@ -315,10 +342,12 @@ function loadPlyArrayBuffer(arrayBuffer, label) {
   sceneScale = sphere ? sphere.radius : 5;
   const dist = sceneScale * 2.2;
   camera.position.set(dist * 0.5, dist * 0.3, dist);
-  camera.near = Math.max(dist / 2000, 0.001);
+  // 近接クリップ面はシーン規模に関係なく小さく固定し、地面や細部までズームインしても消えないようにする
+  camera.near = 0.005;
   camera.far = dist * 20;
   camera.updateProjectionMatrix();
   controls.target.set(0, 0, 0);
+  controls.minDistance = 0.02;
   controls.update();
 
   scene.add(pointCloud);
@@ -372,10 +401,12 @@ function setActiveTool(tool) {
   measureHint.style.display = 'none';
   cancelPending();
 
-  areaModeBtn.textContent = '📐 面積/体積: OFF';
-  areaModeBtn.classList.remove('active');
-  areaHint.style.display = 'none';
-  areaFinishBtn.style.display = 'none';
+  for (const t of [areaTool, volumeTool]) {
+    t.modeBtn.textContent = `${t.key === 'area' ? '📐 面積計測' : '📦 体積計測'}: OFF`;
+    t.modeBtn.classList.remove('active');
+    t.hintEl.style.display = 'none';
+    t.finishBtn.style.display = 'none';
+  }
 
   pinModeBtn.textContent = '📌 ピン留め: OFF';
   pinModeBtn.classList.remove('active');
@@ -388,11 +419,12 @@ function setActiveTool(tool) {
     measureBtn.textContent = '📏 距離測定: ON';
     measureBtn.classList.add('active');
     measureHint.style.display = 'block';
-  } else if (tool === 'area') {
-    areaModeBtn.textContent = '📐 面積/体積: ON';
-    areaModeBtn.classList.add('active');
-    areaHint.style.display = 'block';
-    if (areaPoints.length >= 3 && !areaFinished) areaFinishBtn.style.display = 'inline-block';
+  } else if (tool === 'area' || tool === 'volume') {
+    const t = tool === 'area' ? areaTool : volumeTool;
+    t.modeBtn.textContent = `${t.key === 'area' ? '📐 面積計測' : '📦 体積計測'}: ON`;
+    t.modeBtn.classList.add('active');
+    t.hintEl.style.display = 'block';
+    if (t.points.length >= 3 && !t.finished) t.finishBtn.style.display = 'inline-block';
   } else if (tool === 'pin') {
     pinModeBtn.textContent = '📌 ピン留め: ON';
     pinModeBtn.classList.add('active');
@@ -411,7 +443,8 @@ function setupInteraction() {
     downPos = null;
     if (moved > 5) return; // ドラッグ（回転操作）とみなしクリック扱いしない
     if (activeTool === 'measure') handleMeasureClick(e);
-    else if (activeTool === 'area') handleAreaClick(e);
+    else if (activeTool === 'area') handlePolygonClick(e, areaTool);
+    else if (activeTool === 'volume') handlePolygonClick(e, volumeTool);
     else if (activeTool === 'pin') handlePinClick(e);
   });
 }
@@ -523,11 +556,13 @@ function updateAllLabels() {
     m.label.style.display = p.visible ? 'block' : 'none';
   }
 
-  if (areaLabel && areaLabel._centroid) {
-    const p = projectToScreen(areaLabel._centroid);
-    areaLabel.style.left = p.x + 'px';
-    areaLabel.style.top = p.y + 'px';
-    areaLabel.style.display = p.visible ? 'block' : 'none';
+  for (const t of [areaTool, volumeTool]) {
+    if (t.label && t.label._centroid) {
+      const p = projectToScreen(t.label._centroid);
+      t.label.style.left = p.x + 'px';
+      t.label.style.top = p.y + 'px';
+      t.label.style.display = p.visible ? 'block' : 'none';
+    }
   }
 
   for (const pin of pins) {
@@ -539,96 +574,104 @@ function updateAllLabels() {
 }
 
 // ------------------------------------------------------------------
-// 面積/体積計測機能（多角形の頂点をクリックで指定 → 水平投影面積とおおまかな体積を算出）
+// 面積計測・体積計測機能（多角形の頂点をクリックで指定 → 水平投影面積、または面積×高さで概算体積を算出）
 // ------------------------------------------------------------------
-function setupAreaTool() {
-  areaModeBtn.addEventListener('click', () => setActiveTool(activeTool === 'area' ? 'none' : 'area'));
-  areaFinishBtn.addEventListener('click', finishAreaPolygon);
-  areaClearBtn.addEventListener('click', clearArea);
-  baseHeightInput.addEventListener('input', updateAreaResult);
+function setupPolygonTool(tool) {
+  tool.modeBtn.addEventListener('click', () => setActiveTool(activeTool === tool.key ? 'none' : tool.key));
+  tool.finishBtn.addEventListener('click', () => finishPolygon(tool));
+  tool.clearBtn.addEventListener('click', () => clearPolygonTool(tool));
+  if (tool.showBaseHeight) baseHeightInput.addEventListener('input', () => updatePolygonResult(tool));
 }
 
-function handleAreaClick(e) {
-  if (areaFinished) return; // 確定後に続けたい場合はクリアしてやり直す
+function handlePolygonClick(e, tool) {
+  if (tool.finished) return; // 確定後に続けたい場合はクリアしてやり直す
   const point = raycastFromEvent(e);
   if (!point) return;
 
-  areaPoints.push(point);
-  const marker = makeMarker(point, 0x50ff90);
+  tool.points.push(point);
+  const marker = makeMarker(point, tool.color);
   scene.add(marker);
-  areaMarkers.push(marker);
+  tool.markers.push(marker);
 
-  updateAreaLine(areaPoints);
-  areaFinishBtn.style.display = areaPoints.length >= 3 ? 'inline-block' : 'none';
+  updatePolygonLine(tool, tool.points);
+  tool.finishBtn.style.display = tool.points.length >= 3 ? 'inline-block' : 'none';
 }
 
-function updateAreaLine(points) {
-  if (areaLine) {
-    scene.remove(areaLine);
-    areaLine.geometry.dispose();
-    areaLine.material.dispose();
-    areaLine = null;
+function updatePolygonLine(tool, points) {
+  if (tool.line) {
+    scene.remove(tool.line);
+    tool.line.geometry.dispose();
+    tool.line.material.dispose();
+    tool.line = null;
   }
   if (points.length < 2) return;
   const geom = new THREE.BufferGeometry().setFromPoints(points);
-  areaLine = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x50ff90 }));
-  scene.add(areaLine);
+  tool.line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: tool.color }));
+  scene.add(tool.line);
 }
 
-function finishAreaPolygon() {
-  if (areaPoints.length < 3 || areaFinished) return;
-  areaFinished = true;
-  areaFinishBtn.style.display = 'none';
+function finishPolygon(tool) {
+  if (tool.points.length < 3 || tool.finished) return;
+  tool.finished = true;
+  tool.finishBtn.style.display = 'none';
 
   // 多角形を閉じたラインとして再描画
-  updateAreaLine(areaPoints.concat([areaPoints[0]]));
+  updatePolygonLine(tool, tool.points.concat([tool.points[0]]));
 
   // 水平投影面積（シューレースの公式、XZ平面に投影。Yは高さ扱い）
   let sum = 0;
-  for (let i = 0; i < areaPoints.length; i++) {
-    const p1 = areaPoints[i];
-    const p2 = areaPoints[(i + 1) % areaPoints.length];
+  for (let i = 0; i < tool.points.length; i++) {
+    const p1 = tool.points[i];
+    const p2 = tool.points[(i + 1) % tool.points.length];
     sum += p1.x * p2.z - p2.x * p1.z;
   }
-  areaValue = Math.abs(sum) / 2;
-  areaAvgZ = areaPoints.reduce((s, p) => s + p.y, 0) / areaPoints.length;
-  const minZ = Math.min(...areaPoints.map(p => p.y));
+  tool.value = Math.abs(sum) / 2;
+  tool.avgH = tool.points.reduce((s, p) => s + p.y, 0) / tool.points.length;
 
-  baseHeightRow.style.display = 'flex';
-  baseHeightInput.value = minZ.toFixed(2);
+  if (tool.showBaseHeight) {
+    const minH = Math.min(...tool.points.map(p => p.y));
+    baseHeightRow.style.display = 'flex';
+    baseHeightInput.value = minH.toFixed(2);
+  }
 
-  const centroid = areaPoints
+  const centroid = tool.points
     .reduce((acc, p) => acc.add(p), new THREE.Vector3())
-    .multiplyScalar(1 / areaPoints.length);
-  areaLabel = document.createElement('div');
-  areaLabel.className = 'areaLabel';
-  areaLabel._centroid = centroid;
-  document.body.appendChild(areaLabel);
+    .multiplyScalar(1 / tool.points.length);
+  tool.label = document.createElement('div');
+  tool.label.className = tool.labelClass;
+  tool.label._centroid = centroid;
+  document.body.appendChild(tool.label);
 
-  updateAreaResult();
+  updatePolygonResult(tool);
 }
 
-function updateAreaResult() {
-  if (!areaFinished) return;
+function updatePolygonResult(tool) {
+  if (!tool.finished) return;
+  if (!tool.showBaseHeight) {
+    tool.resultEl.style.display = 'block';
+    tool.resultEl.textContent = `面積: ${tool.value.toFixed(2)} m²`;
+    if (tool.label) tool.label.textContent = `${tool.value.toFixed(1)}m²`;
+    return;
+  }
   const baseH = parseFloat(baseHeightInput.value);
-  const volume = areaValue * Math.abs(areaAvgZ - (isNaN(baseH) ? areaAvgZ : baseH));
-  areaResult.style.display = 'block';
-  areaResult.textContent = `面積: ${areaValue.toFixed(2)} m²　体積: ${volume.toFixed(2)} m³`;
-  if (areaLabel) areaLabel.textContent = `${areaValue.toFixed(1)}m² / ${volume.toFixed(1)}m³`;
+  const volume = tool.value * Math.abs(tool.avgH - (isNaN(baseH) ? tool.avgH : baseH));
+  tool.resultEl.style.display = 'block';
+  tool.resultEl.textContent = `面積: ${tool.value.toFixed(2)} m²　体積: ${volume.toFixed(2)} m³`;
+  if (tool.label) tool.label.textContent = `${volume.toFixed(1)}m³`;
 }
 
-function clearArea() {
-  for (const m of areaMarkers) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
-  areaMarkers = [];
-  if (areaLine) { scene.remove(areaLine); areaLine.geometry.dispose(); areaLine.material.dispose(); areaLine = null; }
-  if (areaLabel) { areaLabel.remove(); areaLabel = null; }
-  areaPoints = [];
-  areaFinished = false;
-  areaValue = 0;
-  areaAvgZ = 0;
-  areaFinishBtn.style.display = 'none';
-  areaResult.style.display = 'none';
-  baseHeightRow.style.display = 'none';
+function clearPolygonTool(tool) {
+  for (const m of tool.markers) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  tool.markers = [];
+  if (tool.line) { scene.remove(tool.line); tool.line.geometry.dispose(); tool.line.material.dispose(); tool.line = null; }
+  if (tool.label) { tool.label.remove(); tool.label = null; }
+  tool.points = [];
+  tool.finished = false;
+  tool.value = 0;
+  tool.avgH = 0;
+  tool.finishBtn.style.display = 'none';
+  tool.resultEl.style.display = 'none';
+  if (tool.showBaseHeight) baseHeightRow.style.display = 'none';
 }
 
 // ------------------------------------------------------------------
