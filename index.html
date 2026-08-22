@@ -134,7 +134,7 @@
     <button id="coordClearBtn">クリア</button>
   </div>
   <div id="coordHint" style="color:#999; font-size:11px; display:none;">
-    点群上をクリックすると、その点のX,Y,Z座標(元データの測量座標系)を表示します
+    点群上をクリックすると、その点のX,Y,Z座標(元データの測量座標系。Zが高さ)を表示します
   </div>
   <div id="coordList"></div>
   <hr>
@@ -838,7 +838,7 @@ function relabelCoords() {
 function renderCoordList() {
   coordList.innerHTML = coordPoints.map((cp, i) => `
     <div class="coordRow">
-      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)}<br>Y: ${cp.orig.y.toFixed(3)}<br>Z: ${cp.orig.z.toFixed(3)}</span>
+      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)}<br>Y: ${cp.orig.y.toFixed(3)}<br>Z(高さ): ${cp.orig.z.toFixed(3)}</span>
       <button data-idx="${i}" class="coordDelBtn">×</button>
     </div>
   `).join('');
