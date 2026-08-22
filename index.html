@@ -838,7 +838,7 @@ function relabelCoords() {
 function renderCoordList() {
   coordList.innerHTML = coordPoints.map((cp, i) => `
     <div class="coordRow">
-      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)}<br>Y: ${cp.orig.y.toFixed(3)}<br>Z(高さ): ${cp.orig.z.toFixed(3)}</span>
+      <span class="coordXYZ">#${i + 1}<br>X: ${cp.orig.x.toFixed(3)} m<br>Y: ${cp.orig.y.toFixed(3)} m<br>Z(高さ): ${cp.orig.z.toFixed(3)} m</span>
       <button data-idx="${i}" class="coordDelBtn">×</button>
     </div>
   `).join('');
