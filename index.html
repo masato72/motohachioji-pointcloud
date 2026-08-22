@@ -255,13 +255,16 @@ function loadPlyArrayBuffer(arrayBuffer, label) {
   statsEl.textContent = `points: ${count.toLocaleString()}`;
 }
 
+const MIN_POINT_SIZE = 0.003; // 0.3cm
+const MAX_POINT_SIZE = 0.08;  // 8cm
+
 function applyPointSize() {
   if (!pointCloud) return;
-  const t = sizeSlider.value / 100; // 0.01 - 1.0
-  const size = sceneScale * (0.0008 + t * 0.012);
+  const t = (sizeSlider.value - 1) / 99; // 0 - 1.0
+  const size = MIN_POINT_SIZE + t * (MAX_POINT_SIZE - MIN_POINT_SIZE);
   pointCloud.material.size = size;
   raycaster.params.Points.threshold = size * 1.5;
-  sizeVal.textContent = (size * 100).toFixed(1) + 'cm';
+  sizeVal.textContent = (size * 100).toFixed(2) + 'cm';
 }
 sizeSlider.addEventListener('input', applyPointSize);
 
