@@ -28,8 +28,8 @@
   }
   button:hover { background: #383838; }
   button.active { background: #2f6fb3; border-color: #4a90d9; color: #fff; }
-  #measureList { max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-top: 6px; }
-  #measureList div { display: flex; justify-content: space-between; padding: 1px 0; color: #ddd; }
+  #measureList { max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 6px; }
+  #measureList .measureRow { padding: 3px 0; color: #ddd; border-bottom: 1px solid #2a2a2a; }
   #loading {
     position: absolute; inset: 0; z-index: 30; display: flex;
     align-items: center; justify-content: center; color: #eee;
@@ -530,12 +530,14 @@ function handleMeasureClick(e) {
     scene.add(line);
 
     const dist = a.distanceTo(b);
+    const horiz = Math.hypot(a.x - b.x, a.z - b.z); // 水平距離（Y=高さのため、X,Z平面上の距離）
+    const vert = Math.abs(a.y - b.y); // 高低差
     const label = document.createElement('div');
     label.className = 'measureLabel';
-    label.textContent = `${dist.toFixed(3)} m`;
+    label.innerHTML = `斜距離: ${dist.toFixed(3)} m<br>水平: ${horiz.toFixed(3)} m<br>高低差: ${vert.toFixed(3)} m`;
     document.body.appendChild(label);
 
-    measurements.push({ a, b, markerA, markerB, line, label, dist });
+    measurements.push({ a, b, markerA, markerB, line, label, dist, horiz, vert });
     renderMeasureList();
 
     pendingPoint = null;
@@ -576,7 +578,7 @@ function clearMeasurements() {
 
 function renderMeasureList() {
   measureList.innerHTML = measurements
-    .map((m, i) => `<div><span>#${i + 1}</span><span>${m.dist.toFixed(3)} m</span></div>`)
+    .map((m, i) => `<div class="measureRow">#${i + 1}  斜距離: ${m.dist.toFixed(3)}m  水平: ${m.horiz.toFixed(3)}m  高低差: ${m.vert.toFixed(3)}m</div>`)
     .join('');
 }
 
